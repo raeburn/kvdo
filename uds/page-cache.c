@@ -415,6 +415,8 @@ int invalidate_page_cache_for_chapter(struct page_cache *cache,
 	if ((cache == NULL) || (cache->cache == NULL)) {
 		return UDS_SUCCESS;
 	}
+	uds_log_debug("%d:%s: ch %u pg/ch %u r %d", current->pid, __func__,
+		      chapter, pages_per_chapter, (int) reason);
 
 	for (i = 0; i < pages_per_chapter; i++) {
 		unsigned int physical_page =
@@ -467,6 +469,7 @@ static int __must_check get_least_recent_page(struct page_cache *cache,
 	 * must be one.
 	 */
 	unsigned int i;
+	unsigned int read_pending_count = 0;
 	for (i = 0;; i++) {
 		if (i >= cache->num_cache_entries) {
 			/* This should never happen. */
@@ -482,6 +485,9 @@ static int __must_check get_least_recent_page(struct page_cache *cache,
 	 * read.
 	 */
 	for (i = 0; i < cache->num_cache_entries; i++) {
+		if (cache->cache[i].cp_read_pending) {
+			read_pending_count++;
+		}
 		if (!cache->cache[i].cp_read_pending &&
 		    (READ_ONCE(cache->cache[i].cp_last_used) <=
 		     READ_ONCE(cache->cache[oldest_index].cp_last_used))) {
@@ -489,6 +495,21 @@ static int __must_check get_least_recent_page(struct page_cache *cache,
 		}
 	}
 	*page_ptr = &cache->cache[oldest_index];
+	if ((*page_ptr)->cp_physical_page == cache->num_index_entries)
+		uds_log_debug("%d:%s: select %d lu %lld page @%lx no old phys rp %u",
+			      current->pid, __func__,
+			      oldest_index,
+			      (long long) READ_ONCE(cache->cache[oldest_index].cp_last_used),
+			      (unsigned long) *page_ptr,
+			      read_pending_count);
+	else
+		uds_log_debug("%d:%s: select %d lu %lld page @%lx old phys %d rp %u",
+			      current->pid, __func__,
+			      oldest_index,
+			      (long long) READ_ONCE(cache->cache[oldest_index].cp_last_used),
+			      (unsigned long) *page_ptr,
+			      (*page_ptr)->cp_physical_page,
+			      read_pending_count);
 	return UDS_SUCCESS;
 }
 
@@ -680,6 +701,8 @@ int select_victim_in_cache(struct page_cache *cache,
 	 */
 	if (page->cp_physical_page != cache->num_index_entries) {
 		cache->counters.evictions++;
+		uds_log_debug("%d:%s: evict %u", current->pid, __func__,
+			      page->cp_physical_page);
 		WRITE_ONCE(cache->index[page->cp_physical_page],
 			   cache->num_cache_entries);
 		wait_for_pending_searches(cache, page->cp_physical_page);

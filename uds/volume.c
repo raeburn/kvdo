@@ -140,6 +140,8 @@ int enqueue_page_read(struct volume *volume,
 	}
 
 	if (result == UDS_QUEUED) {
+		uds_log_debug("%d:%s(req=%lx,page=%u)", current->pid, __func__,
+			      (unsigned long) request, physical_page);
 		/* signal a read thread */
 		uds_signal_cond(&volume->read_threads_cond);
 	}
@@ -266,6 +268,13 @@ static void read_thread_function(void *arg)
 
 		record_page = is_record_page(volume->geometry, physical_page);
 
+		uds_log_debug("%d:%s: qpos %u rql %lx ppg %u %s%s",
+			      current->pid, __func__,
+			      queue_pos, (unsigned long) request_list,
+			      physical_page,
+			      record_page ? "rec" : "ind",
+			      invalid ? " inv" : "");
+
 		if (!invalid) {
 			/*
 			 * Find a place to put the read queue page we reserved
@@ -359,10 +368,30 @@ static void read_thread_function(void *arg)
 						       &request->chunk_name,
 						       volume->geometry,
 						       &request->old_metadata)) {
+					uds_log_debug("%d:%s: rq %lx dense",
+						      current->pid, __func__,
+						      (unsigned long) request);
 					request->location = UDS_LOCATION_IN_DENSE;
 				} else {
 					request->location = UDS_LOCATION_UNAVAILABLE;
+					uds_log_debug("%d:%s: rq %lx un",
+						      current->pid, __func__,
+						      (unsigned long) request);
 				}
+			} else {
+				const char *reason;
+				if (result != UDS_SUCCESS)
+					reason = "!success";
+				else if (page == NULL)
+					reason = "!page";
+				else if (!record_page)
+					reason = "!rec";
+				else
+					reason = "?";
+				uds_log_debug("%d:%s: rq %lx %s %d",
+					      current->pid, __func__,
+					      (unsigned long) request,
+					      reason, result);
 			}
 
 			/* reflect any read failures in the request status */
@@ -635,7 +664,7 @@ int get_volume_page(struct volume *volume,
  *
  * @return UDS_SUCCESS or an error code
  **/
-static int search_cached_index_page(struct volume *volume,
+static noinline int search_cached_index_page(struct volume *volume,
 				    struct uds_request *request,
 				    const struct uds_chunk_name *name,
 				    unsigned int chapter,
@@ -684,6 +713,7 @@ static int search_cached_index_page(struct volume *volume,
 }
 
 /**********************************************************************/
+noinline
 int search_cached_record_page(struct volume *volume,
 			      struct uds_request *request,
 			      const struct uds_chunk_name *name,
