@@ -39,6 +39,15 @@ enum {
 	MAX_BAD_CHAPTERS = 100,  /* max number of contiguous bad chapters */
 };
 
+/* Tell gcc the variable (which should already be initialized) must be
+   in some known location at this point so that the asm code (which
+   gcc doesn't recognize is empty) can modify it. Sometimes that'll
+   suppress some optimizations that eliminate the variable in favor of
+   finding the same value elsewhere, so it'll show up in the debug
+   info and then systemtap can find it.  */
+#define KEEP(VAR) \
+	__asm__ __volatile__("" : "=rm" (VAR) : "0" (VAR))
+
 /**********************************************************************/
 static INLINE unsigned int map_to_page_number(struct geometry *geometry,
 					      unsigned int physical_page)
@@ -249,6 +258,7 @@ static void read_thread_function(void *arg)
 	unsigned int physical_page;
 	bool invalid = false;
 
+	KEEP(volume);
 	uds_log_debug("reader starting");
 	uds_lock_mutex(&volume->read_threads_mutex);
 	while (true) {
@@ -268,6 +278,11 @@ static void read_thread_function(void *arg)
 
 		record_page = is_record_page(volume->geometry, physical_page);
 
+		KEEP(queue_pos);
+		KEEP(request_list);
+		KEEP(physical_page);
+		KEEP(invalid);
+		KEEP(record_page);
 		uds_log_debug("%d:%s: qpos %u rql %lx ppg %u %s%s",
 			      current->pid, __func__,
 			      queue_pos, (unsigned long) request_list,
@@ -282,6 +297,7 @@ static void read_thread_function(void *arg)
 			 */
 			result = select_victim_in_cache(volume->page_cache,
 							&page);
+			KEEP(page);
 			if (result == UDS_SUCCESS) {
 				uds_unlock_mutex(&volume->read_threads_mutex);
 				result =
@@ -348,6 +364,7 @@ static void read_thread_function(void *arg)
 		while (request_list != NULL) {
 			struct uds_request *request = request_list;
 			request_list = request->next_request;
+			KEEP(request);
 
 			/*
 			 * If we've read in a record page, we're going to do an

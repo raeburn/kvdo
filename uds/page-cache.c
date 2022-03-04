@@ -35,6 +35,15 @@
 #include "string-utils.h"
 #include "uds-threads.h"
 
+/* Tell gcc the variable (which should already be initialized) must be
+   in some known location at this point so that the asm code (which
+   gcc doesn't recognize is empty) can modify it. Sometimes that'll
+   suppress some optimizations that eliminate the variable in favor of
+   finding the same value elsewhere, so it'll show up in the debug
+   info and then systemtap can find it.  */
+#define KEEP(VAR) \
+	__asm__ __volatile__("" : "=rm" (VAR) : "0" (VAR))
+
 /**********************************************************************/
 int assert_page_in_cache(struct page_cache *cache, struct cached_page *page)
 {
@@ -458,8 +467,9 @@ void make_page_most_recent(struct page_cache *cache, struct cached_page *page)
  *
  * @return UDS_SUCCESS or an error code
  **/
-static int __must_check get_least_recent_page(struct page_cache *cache,
-					      struct cached_page **page_ptr)
+static noinline int __must_check
+get_least_recent_page(struct page_cache *cache,
+		      struct cached_page **page_ptr)
 {
 	/* We hold the readThreadsMutex. */
 	int oldest_index = 0;
@@ -475,6 +485,7 @@ static int __must_check get_least_recent_page(struct page_cache *cache,
 			/* This should never happen. */
 			return ASSERT(false, "oldest page is not NULL");
 		}
+		KEEP(i);
 		if (!cache->cache[i].cp_read_pending) {
 			oldest_index = i;
 			break;
@@ -485,6 +496,7 @@ static int __must_check get_least_recent_page(struct page_cache *cache,
 	 * read.
 	 */
 	for (i = 0; i < cache->num_cache_entries; i++) {
+		KEEP(i);
 		if (cache->cache[i].cp_read_pending) {
 			read_pending_count++;
 		}
@@ -686,6 +698,7 @@ int select_victim_in_cache(struct page_cache *cache,
 	}
 
 	result = get_least_recent_page(cache, &page);
+	KEEP(page);
 	if (result != UDS_SUCCESS) {
 		return result;
 	}
