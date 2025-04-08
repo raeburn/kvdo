@@ -146,6 +146,7 @@
 #include <linux/list.h>
 #include <linux/murmurhash3.h>
 #include <linux/ratelimit.h>
+#include <linux/sched.h>
 #include <linux/spinlock.h>
 #include <linux/timer.h>
 
@@ -1022,6 +1023,8 @@ static void process_update_result(struct data_vio *agent)
 {
 	struct dedupe_context *context = agent->dedupe_context;
 
+	vdotrace_record_pointer(agent);
+	vdotrace_record_pointer(context);
 	if (context == NULL) {
 		return;
 	}
@@ -1029,6 +1032,7 @@ static void process_update_result(struct data_vio *agent)
 	if (change_context_state(context,
 				 DEDUPE_CONTEXT_COMPLETE,
 				 DEDUPE_CONTEXT_IDLE)) {
+		vdotrace_record_pointer(context);
 		release_context(context);
 	}
 }
@@ -2055,6 +2059,8 @@ static bool decode_uds_advice(struct dedupe_context *context)
 	byte version;
 	int result;
 
+	vdotrace_record_pointer(context);
+	vdotrace_record_pointer(data_vio);
 	if ((request->status != UDS_SUCCESS) || !request->found) {
 		return false;
 	}
@@ -2097,6 +2103,8 @@ static void process_query_result(struct data_vio *agent)
 {
 	struct dedupe_context *context = agent->dedupe_context;
 
+	vdotrace_record_pointer(agent);
+	vdotrace_record_pointer(context);
 	if (context == NULL) {
 		return;
 	}
@@ -2104,7 +2112,13 @@ static void process_query_result(struct data_vio *agent)
 	if (change_context_state(context,
 				 DEDUPE_CONTEXT_COMPLETE,
 				 DEDUPE_CONTEXT_IDLE)) {
+		ASSERT_LOG_ONLY(agent == context->requestor,
+				"agent %lx should be context %lx requestor %lx",
+				(unsigned long) agent,
+				(unsigned long) context,
+				(unsigned long) context->requestor);
 		agent->is_duplicate = decode_uds_advice(context);
+		vdotrace_record_pointer(context);
 		release_context(context);
 	}
 }
@@ -2123,8 +2137,12 @@ static void finish_querying(struct vdo_completion *completion)
 
 	assert_hash_lock_agent(agent, __func__);
 
+	vdotrace_record_pointer(completion);
+	//BUG_ON(agent->dedupe_context != NULL && agent != agent->dedupe_context->requestor);
+
 	process_query_result(agent);
 	if (completion->result != VDO_SUCCESS) {
+		vdotrace_record_pointer(completion);
 		abort_hash_lock(lock, agent);
 		return;
 	}
@@ -2840,6 +2858,7 @@ static void finish_index_operation(struct uds_request *request)
 	struct dedupe_context *context = container_of(request,
 						      struct dedupe_context,
 						      request);
+	vdotrace_record(in_interrupt() ? -2ULL : current->pid);
 	if (change_context_state(context,
 				 DEDUPE_CONTEXT_PENDING,
 				 DEDUPE_CONTEXT_COMPLETE)) {
@@ -2847,10 +2866,13 @@ static void finish_index_operation(struct uds_request *request)
 		 * This query has not timed out, so send its data_vio back to
 		 * its hash zone to process the results.
 		 */
+		vdotrace_record_pointer(context);
+		vdotrace_record_pointer(context->requestor);
 		continue_data_vio(context->requestor, VDO_SUCCESS);
 		return;
 	}
 
+	vdotrace_record_pointer(context);
 	/*
 	 * This query has timed out, so try to mark it complete and hence
 	 * eligible for reuse. Its data_vio has already moved on.
@@ -2858,6 +2880,7 @@ static void finish_index_operation(struct uds_request *request)
 	if (!change_context_state(context,
 				  DEDUPE_CONTEXT_TIMED_OUT,
 				  DEDUPE_CONTEXT_TIMED_OUT_COMPLETE)) {
+		vdotrace_record_pointer(context);
 		ASSERT_LOG_ONLY(false,
 				"uds request was timed out (state %d)",
 				atomic_read(&context->state));
@@ -2873,6 +2896,9 @@ static void check_for_drain_complete(struct hash_zone *zone)
 	struct dedupe_context *context, *tmp;
 	vio_count_t recycled = 0;
 
+	//printk(KERN_INFO "%s(%lx) pid %d %s\n", __func__, (unsigned long) zone, current->pid, current->comm);
+	vdotrace_record(in_interrupt() ? -2ULL : current->pid);
+	assert_in_hash_zone(zone, __func__);
 	if (!vdo_is_state_draining(&zone->state)) {
 		return;
 	}
@@ -2881,9 +2907,11 @@ static void check_for_drain_complete(struct hash_zone *zone)
 				 tmp,
 				 &zone->timed_out,
 				 list_entry) {
+		vdotrace_record_pointer(context);
 		if (change_context_state(context,
 					 DEDUPE_CONTEXT_TIMED_OUT_COMPLETE,
 					 DEDUPE_CONTEXT_IDLE)) {
+			vdotrace_record_pointer(context);
 			list_move(&context->list_entry, &zone->available);
 			recycled++;
 		}
@@ -2916,6 +2944,7 @@ timeout_index_operations_callback(struct vdo_completion *completion)
 	unsigned long cutoff = jiffies - timeout_jiffies;
 	unsigned int timed_out = 0;
 
+	vdotrace_record(0);
 	atomic_set(&zone->timer_state, DEDUPE_QUERY_TIMER_IDLE);
 	list_for_each_entry_safe(context,
 				 tmp,
@@ -2927,6 +2956,7 @@ timeout_index_operations_callback(struct vdo_completion *completion)
 			 * out yet, so restart the timer.
 			 */
 			start_expiration_timer(context);
+			vdotrace_record_pointer(context);
 			break;
 		}
 
@@ -2939,6 +2969,7 @@ timeout_index_operations_callback(struct vdo_completion *completion)
 			 * query, its requestor is already enqueued to process
 			 * it.
 			 */
+			vdotrace_record_pointer(context);
 			continue;
 		}
 
@@ -2948,6 +2979,7 @@ timeout_index_operations_callback(struct vdo_completion *completion)
 		 * it, it will be reused. Meanwhile, send its requestor on its
 		 * way.
 		 */
+		vdotrace_record_pointer(context);
 		list_move(&context->list_entry, &zone->timed_out);
 		context->requestor->dedupe_context = NULL;
 		continue_data_vio(context->requestor, VDO_SUCCESS);
@@ -2965,9 +2997,11 @@ static void timeout_index_operations(struct timer_list *t)
 {
 	struct hash_zone *zone = from_timer(zone, t, timer);
 
+	vdotrace_record(0);
 	if (change_timer_state(zone,
 			       DEDUPE_QUERY_TIMER_RUNNING,
 			       DEDUPE_QUERY_TIMER_FIRED)) {
+		vdotrace_record(0);
 		vdo_invoke_completion_callback(&zone->completion);
 	}
 }
@@ -3602,6 +3636,7 @@ acquire_context(struct hash_zone *zone)
 					   struct dedupe_context,
 					   list_entry);
 		list_del(&context->list_entry);
+		vdotrace_record_pointer(context);
 		return context;
 	}
 
@@ -3622,10 +3657,12 @@ acquire_context(struct hash_zone *zone)
 			if (context == NULL) {
 				list_del(&timed_out->list_entry);
 				context = timed_out;
+				vdotrace_record_pointer(context);
 			} else {
 				list_move(&timed_out->list_entry,
 					  &zone->available);
 				recycled++;
+				vdotrace_record_pointer(context);
 			}
 		}
 	}
@@ -3680,11 +3717,13 @@ query_index(struct data_vio *data_vio, enum uds_request_type operation)
 
 	context = acquire_context(zone);
 	if (context == NULL) {
+		vdotrace_record_pointer(data_vio);
 		atomic64_inc(&vdo->hash_zones->dedupe_context_busy);
 		continue_data_vio(data_vio, VDO_SUCCESS);
 		return;
 	}
 
+	vdotrace_record_pointer(data_vio);
 	data_vio->dedupe_context = context;
 	context->requestor = data_vio;
 	context->submission_jiffies = jiffies;

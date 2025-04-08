@@ -67,6 +67,9 @@ static void finish_vdo_request_queue(void *ptr)
 	uds_unregister_allocating_thread();
 }
 
+uint64_t *vdotrace_data;
+uint32_t vdotrace_counter;
+
 #ifdef MODULE
 #define MODULE_NAME THIS_MODULE->name
 #else

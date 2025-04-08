@@ -271,4 +271,38 @@ static inline u32 vdo_crc32(const void *buf, unsigned long len)
 	return (crc32(0L, buf, len) ^ ~0L);
 }
 
+enum {
+	VDOTRACE_LINENO_BITS = 12,
+	VDOTRACE_GEN_BITS = 2,
+	VDOTRACE_GEN_MASK = (1 << VDOTRACE_GEN_BITS) - 1,
+	VDOTRACE_DATA_BITS = 64 - VDOTRACE_LINENO_BITS - VDOTRACE_GEN_BITS,
+	VDOTRACE_ARRAY_SHIFT = 20,
+	VDOTRACE_ARRAY_SIZE = 1 << VDOTRACE_ARRAY_SHIFT,
+};
+
+extern uint64_t *vdotrace_data;
+extern uint32_t vdotrace_counter;
+
+union vdotrace_u {
+	uint64_t u;
+	struct {
+		uint64_t lineno : VDOTRACE_LINENO_BITS;
+		uint64_t generation : VDOTRACE_GEN_BITS;
+		uint64_t data : VDOTRACE_DATA_BITS;
+	} s;
+};
+
+static inline void vdotrace_record_with_lineno(uint64_t data, unsigned int lineno)
+{
+	unsigned int counter = __atomic_add_fetch(&vdotrace_counter, 1, __ATOMIC_RELAXED);
+	unsigned int array_index = counter & (VDOTRACE_ARRAY_SIZE - 1);
+	unsigned int generation = (counter >> VDOTRACE_ARRAY_SHIFT) & VDOTRACE_GEN_MASK;
+	union vdotrace_u vu = { .s = { .lineno = lineno, .generation = generation, .data = data } };
+	WRITE_ONCE(vdotrace_data[array_index], vu.u);
+}
+
+#define vdotrace_record(VALUE) vdotrace_record_with_lineno((VALUE), __LINE__)
+#define vdotrace_record_pointer(VALUE)					\
+	vdotrace_record((unsigned long)(VALUE) / __alignof__(__typeof__(*(VALUE))))
+
 #endif /* VDO_H */

@@ -621,6 +621,14 @@ static int __init vdo_init(void)
 	vdo_initialize_device_registry_once();
 	uds_log_info("loaded version %s", CURRENT_VERSION);
 
+	result = UDS_ALLOCATE(VDOTRACE_ARRAY_SIZE, uint64_t, "vdotrace array",
+			      &vdotrace_data);
+	if (result != UDS_SUCCESS) {
+		uds_log_error("allocating trace array failed %d", result);
+		vdo_module_destroy();
+		return result;
+	}
+
 	/* Add VDO errors to the already existing set of errors in UDS. */
 	result = vdo_register_status_codes();
 	if (result != UDS_SUCCESS) {
@@ -649,6 +657,7 @@ static void __exit vdo_exit(void)
 	 * UDS module level exit processing must be done after all VDO
 	 * module exit processing is complete.
 	 */
+	UDS_FREE(UDS_FORGET(vdotrace_data));
 	uds_put_sysfs();
 	uds_memory_exit();
 }
